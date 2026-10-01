@@ -1,4 +1,5 @@
 #import "KartPadPhysicalControllers.h"
+#include "KartPadDolphinProfile.h"
 
 #import "SunPadControllerSlots.h"
 #import "SunPadDiagnostics.h"
@@ -10,11 +11,62 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <mutex>
 #include <vector>
 
 namespace {
+
+namespace Profile = kartpad::mobile::dolphin_profile;
+NSString *const kDolphinProfileKey = @"KartPadDolphinXboxProfileV1";
+
+std::int64_t ProfileTimeUs() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+Profile::Sample ProfileSample(const KartPadPhysicalControllerSample& input) {
+  Profile::Sample sample;
+  sample.a = (input.faceButtons & SunPadPhysicalControllerButtonA) != 0;
+  sample.b = (input.faceButtons & SunPadPhysicalControllerButtonB) != 0;
+  sample.x = (input.faceButtons & SunPadPhysicalControllerButtonX) != 0;
+  sample.y = (input.faceButtons & SunPadPhysicalControllerButtonY) != 0;
+  sample.menu = input.menu;
+  sample.leftShoulder = (input.faceButtons & SunPadPhysicalControllerButtonLeftShoulder) != 0;
+  sample.rightShoulder = input.rightShoulder;
+  sample.left = input.dpadLeft;
+  sample.right = input.dpadRight;
+  sample.leftX = input.leftX;
+  sample.leftY = input.leftY;
+  sample.rightX = input.rightX;
+  sample.rightY = input.rightY;
+  sample.leftTrigger = input.leftTrigger;
+  sample.rightTrigger = input.rightTrigger;
+  return sample;
+}
+
+SunPadInputState ProfileState(const Profile::State& input) {
+  SunPadInputState state{};
+  state.connected = 1;
+  state.stickX = input.leftX;
+  state.stickY = input.leftY;
+  state.cStickX = input.rightX;
+  state.cStickY = input.rightY;
+  state.triggerL = input.leftTrigger;
+  state.triggerR = input.rightTrigger;
+  if (input.accelerate) state.buttons |= SunPadButtonA;
+  if (input.brake) state.buttons |= SunPadButtonB;
+  if (input.rearView) state.buttons |= SunPadButtonX;
+  if (input.pause) state.buttons |= SunPadButtonStart;
+  if (input.item) state.buttons |= SunPadButtonL;
+  if (input.drift) state.buttons |= SunPadButtonR;
+  if (input.up) state.buttons |= SunPadButtonDpadUp;
+  if (input.down) state.buttons |= SunPadButtonDpadDown;
+  if (input.left) state.buttons |= SunPadButtonDpadLeft;
+  if (input.right) state.buttons |= SunPadButtonDpadRight;
+  return state;
+}
 
 uintptr_t ControllerInstanceID(GCController *controller) {
   return reinterpret_cast<uintptr_t>((__bridge void *)controller);
@@ -163,6 +215,10 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
   std::array<SunPadInputState, SunPadControllerSlots::kMaxPlayers> _states;
   std::array<uint16_t, SunPadControllerSlots::kMaxPlayers> _latchedButtons;
   BOOL _started;
+  BOOL _dolphinProfileEnabled;
+  BOOL _profilePlayerOne;
+  Profile::Sample _profileSample;
+  Profile::TimedShortcut _shortcut;
 }
 
 + (instancetype)sharedControllers {
@@ -180,6 +236,7 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
     _configuredControllers = [NSMutableDictionary dictionary];
     _states = {};
     _latchedButtons = {};
+    _dolphinProfileEnabled = [NSUserDefaults.standardUserDefaults boolForKey:kDolphinProfileKey];
   }
   return self;
 }
@@ -213,6 +270,9 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
     std::scoped_lock lock(_stateMutex);
     _states = {};
     _latchedButtons = {};
+    _profilePlayerOne = NO;
+    _profileSample = {};
+    _shortcut.Reset();
   }
   [[SunPadInputMixer sharedMixer] clearInputFromTouch:NO];
 }
@@ -227,8 +287,10 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
   if (slot < 0 || slot >= static_cast<int>(SunPadControllerSlots::kMaxPlayers)) {
     return;
   }
-  const SunPadInputState state = KartPadAdaptPhysicalControllerSample(
-      SampleFromController(controller), [SunPadControllerMappingStore mapping]);
+  const auto sample = SampleFromController(controller);
+  SunPadInputState state = KartPadAdaptPhysicalControllerSample(
+      sample, [SunPadControllerMappingStore mapping]);
+  BOOL profile = NO;
   if (UsesMicroProfile(controller) && (state.buttons != 0 || state.stickX != 0 || state.stickY != 0)) {
     static std::atomic<int> logged{0};
     if (logged.fetch_add(1, std::memory_order_relaxed) < 12) {
@@ -239,10 +301,21 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
   {
     std::scoped_lock lock(_stateMutex);
     const std::size_t index = static_cast<std::size_t>(slot);
+    profile = slot == 0 && _dolphinProfileEnabled && controller.extendedGamepad != nil;
+    if (slot == 0) {
+      if (profile != _profilePlayerOne) _shortcut.Reset();
+      _profilePlayerOne = profile;
+      if (profile) {
+        _profileSample = ProfileSample(sample);
+        // Only ordinary buttons latch at event time. Timed Y expressions run
+        // at input polls, including polls where the controller has no events.
+        state = ProfileState(Profile::Transform(_profileSample));
+      }
+    }
     _latchedButtons[index] |= state.buttons & ~_states[index].buttons;
     _states[index] = state;
   }
-  if (slot == 0) {
+  if (slot == 0 && !profile) {
     [[SunPadInputMixer sharedMixer] setInputState:state fromTouch:NO];
   }
 }
@@ -313,6 +386,11 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
       std::scoped_lock lock(_stateMutex);
       _states[change.slot] = {};
       _latchedButtons[change.slot] = 0;
+      if (change.slot == 0) {
+        _profilePlayerOne = NO;
+        _profileSample = {};
+        _shortcut.Reset();
+      }
     }
     if (change.slot == 0) {
       [[SunPadInputMixer sharedMixer] clearInputFromTouch:NO];
@@ -341,9 +419,57 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
   }
   std::scoped_lock lock(_stateMutex);
   *state = _states[player];
+  if (player == 0 && _profilePlayerOne) {
+    *state = ProfileState(Profile::Transform(
+        _profileSample, _shortcut.Poll(_profileSample.y, ProfileTimeUs())));
+  }
   state->buttons |= _latchedButtons[player];
   _latchedButtons[player] = 0;
   return state->connected != 0;
+}
+
+- (SunPadInputState)consumeMergedPlayerOne {
+  std::scoped_lock lock(_stateMutex);
+  if (_profilePlayerOne) {
+    auto state = ProfileState(Profile::Transform(
+        _profileSample, _shortcut.Poll(_profileSample.y, ProfileTimeUs())));
+    state.buttons |= _latchedButtons[0];
+    _latchedButtons[0] = 0;
+    [[SunPadInputMixer sharedMixer] setInputState:state fromTouch:NO];
+  }
+  return [[SunPadInputMixer sharedMixer] consumeMergedState];
+}
+
+- (BOOL)isDolphinProfileEnabled {
+  std::scoped_lock lock(_stateMutex);
+  return _dolphinProfileEnabled;
+}
+
+- (void)setDolphinProfileEnabled:(BOOL)enabled {
+  NSAssert(NSThread.isMainThread, @"Controller preset changes require the main thread");
+  [NSUserDefaults.standardUserDefaults setBool:enabled forKey:kDolphinProfileKey];
+  {
+    std::scoped_lock lock(_stateMutex);
+    _dolphinProfileEnabled = enabled;
+    _profilePlayerOne = NO;
+    _profileSample = {};
+    _shortcut.Reset();
+    _states[0] = {};
+    _latchedButtons[0] = 0;
+    [[SunPadInputMixer sharedMixer] clearInputFromTouch:NO];
+  }
+  for (GCController *controller in _configuredControllers.allValues) {
+    [self publishController:controller];
+  }
+}
+
+- (void)resetDolphinShortcut {
+  std::scoped_lock lock(_stateMutex);
+  _shortcut.Reset();
+  if (_profilePlayerOne) {
+    _latchedButtons[0] = 0;
+    [[SunPadInputMixer sharedMixer] clearInputFromTouch:NO];
+  }
 }
 
 - (BOOL)isPlayerConnected:(NSUInteger)player {
