@@ -1952,6 +1952,9 @@ static NSString *const kKartPadPreferredGameKey = @"KartPadPreferredGame";
 
 @end
 
+static bool KartPadLowLatencyDisplayEnabled();
+static void KartPadSetLowLatencyDisplayEnabled(bool enabled);
+
 @implementation KartPadGameOverlay
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -2521,6 +2524,15 @@ static NSString *const kKartPadPreferredGameKey = @"KartPadPreferredGame";
     [sizes addObject:size];
   }
   [displayItems addObject:[UIMenu menuWithTitle:@"FPS Counter Size" children:sizes]];
+  UIAction *lowLatencyDisplay = [UIAction actionWithTitle:@"Low-Latency Display (Experimental)"
+      image:[UIImage systemImageNamed:@"bolt"] identifier:@"dev.kartpad.low-latency-display"
+      handler:^(__kindof UIAction *action) {
+    KartPadSetLowLatencyDisplayEnabled(!KartPadLowLatencyDisplayEnabled());
+    [weakSelf refreshMenuButton];
+  }];
+  lowLatencyDisplay.state =
+      KartPadLowLatencyDisplayEnabled() ? UIMenuElementStateOn : UIMenuElementStateOff;
+  [displayItems addObject:lowLatencyDisplay];
   UIMenu *display =
       [UIMenu menuWithTitle:@"Display"
                       image:[UIImage systemImageNamed:@"display"]
@@ -4192,9 +4204,33 @@ extern "C" const char *KartPadMobileSelectedRuntimeProfile() {
   return gKartPadRetroRewindSelected ? "retro_rewind" : "base";
 }
 
-// CAMetalLayer defaults to three drawables, which lets up to two finished
-// 60 Hz frames (~33 ms) wait between a controller press and the screen.
-// Keep at most one queued frame. Called each frame on the main thread.
+@interface KartPadRefreshRateAnchor : NSObject
+- (void)tick:(CADisplayLink *)link;
+@end
+
+@implementation KartPadRefreshRateAnchor
+- (void)tick:(CADisplayLink *)link {
+  (void)link;
+}
+@end
+
+static NSString *const kKartPadLowLatencyDisplayKey = @"KartPadLowLatencyDisplay";
+static std::atomic<int> gKartPadLowLatencyDisplay{-1};
+
+static bool KartPadLowLatencyDisplayEnabled() {
+  int value = gKartPadLowLatencyDisplay.load(std::memory_order_relaxed);
+  if (value < 0) {
+    value = [NSUserDefaults.standardUserDefaults boolForKey:kKartPadLowLatencyDisplayKey] ? 1 : 0;
+    gKartPadLowLatencyDisplay.store(value, std::memory_order_relaxed);
+  }
+  return value == 1;
+}
+
+static void KartPadSetLowLatencyDisplayEnabled(bool enabled) {
+  [NSUserDefaults.standardUserDefaults setBool:enabled forKey:kKartPadLowLatencyDisplayKey];
+  gKartPadLowLatencyDisplay.store(enabled ? 1 : 0, std::memory_order_relaxed);
+}
+
 static CAMetalLayer *KartPadFindMetalLayer(CALayer *layer) {
   if ([layer isKindOfClass:CAMetalLayer.class]) return (CAMetalLayer *)layer;
   for (CALayer *sublayer in layer.sublayers) {
@@ -4203,31 +4239,53 @@ static CAMetalLayer *KartPadFindMetalLayer(CALayer *layer) {
   return nil;
 }
 
-static void KartPadLimitMetalDrawableQueue() {
+// Display latency policy, applied each frame on the main thread:
+// - Ask a ProMotion screen for its full refresh rate, so a finished 60 Hz frame
+//   waits at most one 120 Hz refresh (~8 ms) for scan-out instead of ~17 ms.
+// - Optional Low-Latency Display caps CAMetalLayer at two drawables (at most
+//   one queued frame). Apple's default of three is kept otherwise, because the
+//   cap can block drawable acquisition and make frame pacing uneven.
+static void KartPadApplyDisplayLatencyPolicy() {
   static __weak CAMetalLayer *cachedLayer = nil;
+  static CADisplayLink *refreshLink = nil;
+  static KartPadRefreshRateAnchor *refreshAnchor = nil;
   static NSUInteger searches = 0;
   CAMetalLayer *layer = cachedLayer;
   if (layer == nil) {
     if (searches >= 1200) return;
     ++searches;
+    UIWindowScene *gameScene = nil;
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
       if (![scene isKindOfClass:UIWindowScene.class]) continue;
       for (UIWindow *window in ((UIWindowScene *)scene).windows) {
         layer = KartPadFindMetalLayer(window.layer);
         if (layer != nil) break;
       }
-      if (layer != nil) break;
+      if (layer != nil) {
+        gameScene = (UIWindowScene *)scene;
+        break;
+      }
     }
     if (layer == nil) return;
     cachedLayer = layer;
-    NSLog(@"[KartPad] Metal drawable queue limited to 2 (was %lu)",
-          (unsigned long)layer.maximumDrawableCount);
+    const NSInteger maxFps = gameScene.screen.maximumFramesPerSecond;
+    if (refreshLink == nil && maxFps > 60) {
+      refreshAnchor = [KartPadRefreshRateAnchor new];
+      refreshLink = [CADisplayLink displayLinkWithTarget:refreshAnchor selector:@selector(tick:)];
+      refreshLink.preferredFrameRateRange =
+          CAFrameRateRangeMake((float)maxFps, (float)maxFps, (float)maxFps);
+      [refreshLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    }
+    NSLog(@"[KartPad] display policy: requested %ld Hz, drawables %lu, low-latency=%d",
+          (long)maxFps, (unsigned long)layer.maximumDrawableCount,
+          KartPadLowLatencyDisplayEnabled() ? 1 : 0);
   }
-  if (layer.maximumDrawableCount != 2) layer.maximumDrawableCount = 2;
+  const NSUInteger wanted = KartPadLowLatencyDisplayEnabled() ? 2 : 3;
+  if (layer.maximumDrawableCount != wanted) layer.maximumDrawableCount = wanted;
 }
 
 extern "C" void KartPadMobileServiceMainMenu() {
-  if (NSThread.isMainThread) KartPadLimitMetalDrawableQueue();
+  if (NSThread.isMainThread) KartPadApplyDisplayLatencyPolicy();
   static BOOL previewShown=![NSProcessInfo.processInfo.environment[@"KARTPAD_UI_PREVIEW"] isEqualToString:@"report"];
   if(!previewShown && gRuntimeOverlayHost && NSThread.isMainThread && g_gxFrameCount>120) {
     previewShown=YES;[gRuntimeOverlayHost showReportPreview];
