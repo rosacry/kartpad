@@ -17,7 +17,11 @@ concurrency:
 
 jobs:
   shell:
-    runs-on: xcode-27
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [xcode-27, macos-26]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
@@ -57,7 +61,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: KartPad-ios-shell-controls
+          name: KartPad-ios-shell-controls-${{ matrix.runner }}
           path: build/ios-app/*/out/*.ipa
           if-no-files-found: error
           retention-days: 14
