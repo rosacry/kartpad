@@ -1,0 +1,66 @@
+name: KartPad iOS app shell (Dolphin controller preset)
+
+# Builds only the game-free KartPad app shell (scripts/build-ios-app.sh asserts
+# no translated game code is present). The player's own game pack is added
+# privately afterwards with PadMint; nothing from a disc is used here.
+on:
+  push:
+    branches: [controls-v0.7.3]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shell-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell:
+    runs-on: xcode-27
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          sysctl -n hw.ncpu
+          df -h "$GITHUB_WORKSPACE"
+          brew install ninja ripgrep
+          cmake --version | head -1
+          python3 --version
+
+      - name: Fetch pinned sources (app shell only)
+        run: python3 .github/ci/bootstrap_shell_deps.py
+
+      - name: Build iOS DiscIO dependency
+        run: |
+          ./scripts/build-ios-discio-probe.sh ref/upstream/dolphin \
+            build/dolphin-ios-discio-iphoneos-source \
+            build/dolphin-ios-discio-iphoneos-build iphoneos
+
+      - name: Build game-free app shell
+        env:
+          KARTPAD_DISCIO_SOURCE_DIR: ${{ github.workspace }}/build/dolphin-ios-discio-iphoneos-source
+          KARTPAD_DISCIO_BUILD_DIR: ${{ github.workspace }}/build/dolphin-ios-discio-iphoneos-build
+        run: ./scripts/build-ios-app.sh "$GITHUB_WORKSPACE/build/ios-app"
+
+      - name: Record pack fingerprint and hash
+        run: |
+          ipa="$(ls build/ios-app/*/out/*.ipa)"
+          shasum -a 256 "$ipa"
+          PYTHONPATH=builder python3 -m kartpad_builder.pack_fingerprint ios "$(ls -d build/ios-app/*/runtime | head -1)" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KartPad-ios-shell-controls
+          path: build/ios-app/*/out/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - if: failure()
+        run: df -h "$GITHUB_WORKSPACE"

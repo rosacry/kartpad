@@ -1,6 +1,7 @@
 #include "../../apple/mobile/KartPadClassicInput.h"
 #include "../../apple/mobile/KartPadPhysicalControllers.h"
 #include "../../apple/third_party/sunpad/SunPadControllerSlots.h"
+#include "../../apple/third_party/sunpad/SunPadInputMixer.h"
 
 #import <GameController/GameController.h>
 
@@ -157,6 +158,49 @@ void TestControllerSampleMapping() {
           "physical Menu did not reach Classic Plus");
 }
 
+void TestDolphinPresetBridge() {
+  KartPadPhysicalControllers *bridge = [KartPadPhysicalControllers new];
+  GCController *first = [GCController controllerWithExtendedGamepad];
+  GCController *second = [GCController controllerWithExtendedGamepad];
+  [bridge reconcileControllerList:@[first, second]];
+  [bridge setDolphinProfileEnabled:YES];
+  [first.extendedGamepad.leftThumbstick setValueForXAxis:0.5f yAxis:-0.25f];
+  [first.extendedGamepad.leftShoulder setValue:1];
+  [first.extendedGamepad.rightShoulder setValue:1];
+  [first.extendedGamepad.rightTrigger setValue:0.5999f];
+  [bridge publishController:first];
+  const auto mapped = [bridge consumeMergedPlayerOne];
+  const auto classic = kartpad::mobile::AdaptSunPadInput(mapped);
+  Require(mapped.stickX == 52 && mapped.stickY == -21, "preset curve missing from merged Player 1");
+  Require((classic.buttons & kartpad::mobile::kClassicButtonL) != 0, "item must reach Classic L");
+  Require((classic.buttons & kartpad::mobile::kClassicButtonDown) != 0, "L shoulder Down missing");
+  Require((classic.buttons & kartpad::mobile::kClassicButtonUp) != 0, "R shoulder Up missing");
+  Require((classic.buttons & (kartpad::mobile::kClassicButtonR | kartpad::mobile::kClassicButtonZr)) == 0,
+          "old trigger/rear-view mapping leaked into preset");
+  [first.extendedGamepad.rightTrigger setValue:0.6f];
+  [bridge publishController:first];
+  Require(([bridge consumeMergedPlayerOne].buttons & SunPadButtonR) != 0, "60% drift missing");
+  [first.extendedGamepad.rightTrigger setValue:0];
+  [first.extendedGamepad.leftShoulder setValue:0];
+  [first.extendedGamepad.rightShoulder setValue:0];
+  [bridge publishController:first];
+  [bridge consumeMergedPlayerOne]; // observe released Y before testing pulse
+  [first.extendedGamepad.buttonY setValue:1];
+  [bridge publishController:first];
+  Require(([bridge consumeMergedPlayerOne].buttons & SunPadButtonR) != 0, "Y pulse not polled");
+  [bridge resetDolphinShortcut];
+  Require(([bridge consumeMergedPlayerOne].buttons & (SunPadButtonR | SunPadButtonDpadDown)) == 0,
+          "held Y restarted after lifecycle reset");
+  [second.extendedGamepad.leftThumbstick setValueForXAxis:0.5f yAxis:0];
+  [bridge publishController:second];
+  SunPadInputState playerTwo{};
+  [bridge consumePlayer:1 state:&playerTwo];
+  Require(playerTwo.stickX == 64, "Player 1 preset changed Player 2");
+  [bridge reconcileControllerList:@[]];
+  Require([bridge consumeMergedPlayerOne].buttons == 0, "disconnected preset left stuck input");
+  [bridge setDolphinProfileEnabled:NO];
+}
+
 }  // namespace
 
 int main() {
@@ -167,6 +211,7 @@ int main() {
       TestSharedAndTriggerMapping();
       TestRegistrationAndReconnect();
       TestMicroProfileController();
+      TestDolphinPresetBridge();
       std::cout << "KartPad mobile physical-controller bridge passed\n";
       return EXIT_SUCCESS;
     } catch (const std::exception& error) {
