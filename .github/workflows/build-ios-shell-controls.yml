@@ -27,6 +27,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
+
+      - name: Restore pinned sources and DiscIO build
+        id: depcache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ref
+            build/dependency-cache
+            build/dolphin-ios-discio-iphoneos-source
+            build/dolphin-ios-discio-iphoneos-build
+          key: shell-deps-${{ matrix.runner }}-${{ hashFiles('dependencies.lock.json', 'scripts/build-ios-discio-probe.sh') }}
 
       - name: Toolchain
         run: |
@@ -42,10 +54,22 @@ jobs:
         run: python3 .github/ci/bootstrap_shell_deps.py
 
       - name: Build iOS DiscIO dependency
+        if: steps.depcache.outputs.cache-hit != 'true'
         run: |
           ./scripts/build-ios-discio-probe.sh ref/upstream/dolphin \
             build/dolphin-ios-discio-iphoneos-source \
             build/dolphin-ios-discio-iphoneos-build iphoneos
+
+      - name: Save pinned sources and DiscIO build
+        if: steps.depcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ref
+            build/dependency-cache
+            build/dolphin-ios-discio-iphoneos-source
+            build/dolphin-ios-discio-iphoneos-build
+          key: shell-deps-${{ matrix.runner }}-${{ hashFiles('dependencies.lock.json', 'scripts/build-ios-discio-probe.sh') }}
 
       - name: Build game-free app shell
         env:

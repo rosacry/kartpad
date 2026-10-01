@@ -17,7 +17,9 @@ from kartpad_builder.bootstrap import (  # noqa: E402
 )
 
 deps = _dependency_map(load_lock(repo))
-_prepare_gitlinks(repo, ["vendor/runtimes/ios", "vendor/wiicompiled"], install=True)
+# Every gitlink must be initialized: write-build-provenance.py fingerprints all of them.
+runtime = deps["KartPad WiiCompiled runtime fork"]
+_prepare_gitlinks(repo, list(runtime["platformPaths"].values()) + ["vendor/wiicompiled"], install=True)
 
 profile = json.loads((repo / "builder/profiles/mkwii-rmcp01-rev0.json").read_text())
 for name in profile["sourceDependencies"]:
