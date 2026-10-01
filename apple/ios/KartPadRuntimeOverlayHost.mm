@@ -4192,7 +4192,42 @@ extern "C" const char *KartPadMobileSelectedRuntimeProfile() {
   return gKartPadRetroRewindSelected ? "retro_rewind" : "base";
 }
 
+// CAMetalLayer defaults to three drawables, which lets up to two finished
+// 60 Hz frames (~33 ms) wait between a controller press and the screen.
+// Keep at most one queued frame. Called each frame on the main thread.
+static CAMetalLayer *KartPadFindMetalLayer(CALayer *layer) {
+  if ([layer isKindOfClass:CAMetalLayer.class]) return (CAMetalLayer *)layer;
+  for (CALayer *sublayer in layer.sublayers) {
+    if (CAMetalLayer *found = KartPadFindMetalLayer(sublayer)) return found;
+  }
+  return nil;
+}
+
+static void KartPadLimitMetalDrawableQueue() {
+  static __weak CAMetalLayer *cachedLayer = nil;
+  static NSUInteger searches = 0;
+  CAMetalLayer *layer = cachedLayer;
+  if (layer == nil) {
+    if (searches >= 1200) return;
+    ++searches;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+      if (![scene isKindOfClass:UIWindowScene.class]) continue;
+      for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+        layer = KartPadFindMetalLayer(window.layer);
+        if (layer != nil) break;
+      }
+      if (layer != nil) break;
+    }
+    if (layer == nil) return;
+    cachedLayer = layer;
+    NSLog(@"[KartPad] Metal drawable queue limited to 2 (was %lu)",
+          (unsigned long)layer.maximumDrawableCount);
+  }
+  if (layer.maximumDrawableCount != 2) layer.maximumDrawableCount = 2;
+}
+
 extern "C" void KartPadMobileServiceMainMenu() {
+  if (NSThread.isMainThread) KartPadLimitMetalDrawableQueue();
   static BOOL previewShown=![NSProcessInfo.processInfo.environment[@"KARTPAD_UI_PREVIEW"] isEqualToString:@"report"];
   if(!previewShown && gRuntimeOverlayHost && NSThread.isMainThread && g_gxFrameCount>120) {
     previewShown=YES;[gRuntimeOverlayHost showReportPreview];
