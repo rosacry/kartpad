@@ -166,6 +166,7 @@ void TestDolphinPresetBridge() {
   [bridge setDolphinProfileEnabled:YES];
   [first.extendedGamepad.leftThumbstick setValueForXAxis:0.5f yAxis:-0.25f];
   [first.extendedGamepad.leftShoulder setValue:1];
+  [first.extendedGamepad.leftTrigger setValue:0.6f];
   [first.extendedGamepad.rightShoulder setValue:1];
   [first.extendedGamepad.rightTrigger setValue:0.5999f];
   [bridge publishController:first];
@@ -182,6 +183,7 @@ void TestDolphinPresetBridge() {
   Require(([bridge consumeMergedPlayerOne].buttons & SunPadButtonR) != 0, "60% drift missing");
   [first.extendedGamepad.rightTrigger setValue:0];
   [first.extendedGamepad.leftShoulder setValue:0];
+  [first.extendedGamepad.leftTrigger setValue:0];
   [first.extendedGamepad.rightShoulder setValue:0];
   [bridge publishController:first];
   [bridge consumeMergedPlayerOne]; // observe released Y before testing pulse

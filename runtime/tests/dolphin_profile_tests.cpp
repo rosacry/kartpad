@@ -57,15 +57,18 @@ void TestThreshold() {
   Require(P::Transform(input).rightTrigger == 153 && !P::Transform(input).drift,
           "byte rounding must not trigger drift");
   input.rightTrigger = 0;
-  input.leftTrigger = 1;
-  Require(!P::Transform(input).drift && !P::Transform(input).item, "unbound left trigger became digital");
+  input.leftTrigger = 0.5999;
+  Require(!P::Transform(input).item && !P::Transform(input).drift, "left trigger below 60% must not use item");
+  input.leftTrigger = 0.6;
+  Require(P::Transform(input).item && !P::Transform(input).drift && P::Transform(input).leftTrigger == 255,
+          "left trigger at 60% must use item");
 }
 
 void TestButtons() {
   P::Sample input;
   input.leftShoulder = true;
   auto state = P::Transform(input);
-  Require(state.item && state.down && !state.drift && !state.rearView, "L shoulder item/down");
+  Require(!state.item && state.down && !state.drift && !state.rearView, "L shoulder is Down only");
   input = {}; input.rightShoulder = true;
   state = P::Transform(input);
   Require(state.up && !state.drift && state.rightTrigger == 0, "R shoulder trick without drift");
