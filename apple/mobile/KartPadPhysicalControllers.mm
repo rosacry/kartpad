@@ -208,6 +208,18 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
   return state;
 }
 
+static dispatch_queue_t KartPadControllerEventQueue(void) {
+  static dispatch_queue_t queue;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    queue = dispatch_queue_create(
+        "dev.kartpad.controller-input",
+        dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,
+                                                QOS_CLASS_USER_INTERACTIVE, 0));
+  });
+  return queue;
+}
+
 @implementation KartPadPhysicalControllers {
   SunPadControllerSlots _slots;
   NSMutableDictionary<NSNumber *, GCController *> *_configuredControllers;
@@ -265,9 +277,9 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
     controller.playerIndex = GCControllerPlayerIndexUnset;
   }
   [_configuredControllers removeAllObjects];
-  _slots = {};
   {
     std::scoped_lock lock(_stateMutex);
+    _slots = {};
     _states = {};
     _latchedButtons = {};
     _profilePlayerOne = NO;
@@ -283,7 +295,11 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
 }
 
 - (void)publishController:(GCController *)controller {
-  const int slot = _slots.SlotFor(ControllerInstanceID(controller));
+  int slot = -1;
+  {
+    std::scoped_lock lock(_stateMutex);
+    slot = _slots.SlotFor(ControllerInstanceID(controller));
+  }
   if (slot < 0 || slot >= static_cast<int>(SunPadControllerSlots::kMaxPlayers)) {
     return;
   }
@@ -323,7 +339,11 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
 - (void)configureController:(GCController *)controller
                        slot:(const std::size_t)slot {
   if (!IsSupportedController(controller)) return;
-  controller.handlerQueue = dispatch_get_main_queue();
+  // The game loop runs on the main thread and only drains the main queue once
+  // per frame, so main-queue handlers can hold a press for up to a frame.
+  // Publish on a dedicated user-interactive queue; shared state is guarded by
+  // _stateMutex (including the slot table) and the mixer's own lock.
+  controller.handlerQueue = KartPadControllerEventQueue();
   __weak KartPadPhysicalControllers *weakSelf = self;
   __weak GCController *weakController = controller;
   // Sample inside the event callback. Deferring the read again can turn a
@@ -375,7 +395,11 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
     }
   }
 
-  const SunPadControllerReconcileResult result = _slots.Reconcile(instances);
+  SunPadControllerReconcileResult result;
+  {
+    std::scoped_lock lock(_stateMutex);
+    result = _slots.Reconcile(instances);
+  }
   for (const SunPadControllerSlotChange& change : result.removed) {
     NSNumber *key = @(change.instance);
     GCController *controller = _configuredControllers[key];
@@ -401,7 +425,11 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
   for (GCController *controller in controllers) {
     if (!IsSupportedController(controller)) continue;
     const uintptr_t instance = ControllerInstanceID(controller);
-    const int slot = _slots.SlotFor(instance);
+    int slot = -1;
+    {
+      std::scoped_lock lock(_stateMutex);
+      slot = _slots.SlotFor(instance);
+    }
     if (slot < 0) continue;
     NSNumber *key = @(instance);
     if (_configuredControllers[key] != controller) {
