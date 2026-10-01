@@ -52,8 +52,9 @@ inline State Transform(const Sample& sample, Shortcut shortcut = {}) noexcept {
   state.brake = sample.b;
   state.rearView = sample.x;
   state.pause = sample.menu;
-  // GC Z means Item in MKW. KartPad supplies Classic L for that action.
-  state.item = sample.leftShoulder;
+  // Item is the left trigger, matching the player's DolphiniOS habit, at the
+  // same 60% threshold as drift. LB keeps only its D-pad Down role.
+  state.item = Bounded(sample.leftTrigger, 0, 1) >= 0.6;
   state.up = sample.rightShoulder;
   state.down = sample.leftShoulder || shortcut.down;
   state.left = sample.left;
@@ -65,7 +66,7 @@ inline State Transform(const Sample& sample, Shortcut shortcut = {}) noexcept {
   state.leftY = Axis(Curve(sample.leftY));
   state.rightX = Axis(sample.rightX);
   state.rightY = Axis(sample.rightY);
-  state.leftTrigger = Pressure(sample.leftTrigger);
+  state.leftTrigger = state.item ? 255 : Pressure(sample.leftTrigger);
   state.rightTrigger = state.drift ? 255 : Pressure(sample.rightTrigger);
   return state;
 }
