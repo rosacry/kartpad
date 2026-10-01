@@ -13,10 +13,10 @@ The optional preset applies to Player 1 with an Extended Gamepad. It uses the su
 | Left stick | Signed per-axis `pow(abs(value), 1.3)`, then KartPad byte scaling |
 | Right stick | Linear, matching the saved C-stick expressions |
 | A / B / X / Menu | Accelerate / brake / rear view / pause |
-| Left shoulder | Item (Classic L) and D-pad Down together |
+| Left shoulder | D-pad Down |
 | Right shoulder | D-pad Up; no added drift or trigger pressure |
 | Right trigger | Drift at input >= 0.60; evaluate before byte quantization |
-| Left trigger | Analog value retained; no extra digital button binding |
+| Left trigger | Use Item (Classic L) at input >= 0.60; analog value retained |
 | D-pad Left / Right | Corresponding directions |
 | Y | 50 ms drift pulse; `pulse(hold(Y, 0.016667), 0.05)` for Down |
 
