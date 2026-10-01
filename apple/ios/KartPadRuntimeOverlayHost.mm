@@ -2529,7 +2529,7 @@ static void KartPadApplySoundLevels(BOOL persist) {
                                      (int64_t)(1.1 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
           const SunPadInputState held =
-              [[SunPadInputMixer sharedMixer] consumeMergedState];
+              [[KartPadPhysicalControllers sharedControllers] consumeMergedPlayerOne];
           const KartPadClassicInputState heldClassic =
               kartpad::mobile::AdaptSunPadInput(held);
           const BOOL heldPassed =
@@ -2544,7 +2544,7 @@ static void KartPadApplySoundLevels(BOOL persist) {
                                        (int64_t)(0.1 * NSEC_PER_SEC)),
                          dispatch_get_main_queue(), ^{
             const SunPadInputState locked =
-                [[SunPadInputMixer sharedMixer] consumeMergedState];
+                [[KartPadPhysicalControllers sharedControllers] consumeMergedPlayerOne];
             const KartPadClassicInputState lockedClassic =
                 kartpad::mobile::AdaptSunPadInput(locked);
             const BOOL lockPassed =
@@ -2556,7 +2556,7 @@ static void KartPadApplySoundLevels(BOOL persist) {
                            dispatch_get_main_queue(), ^{
               const KartPadClassicInputState unlockedClassic =
                   kartpad::mobile::AdaptSunPadInput(
-                      [[SunPadInputMixer sharedMixer] consumeMergedState]);
+                      [[KartPadPhysicalControllers sharedControllers] consumeMergedPlayerOne]);
               const BOOL unlockPassed =
                   (unlockedClassic.buttons & kartpad::mobile::kClassicButtonA) == 0;
               gasButton.accessibilityHint = lockPassed && unlockPassed
@@ -2576,10 +2576,10 @@ static void KartPadApplySoundLevels(BOOL persist) {
       dispatch_async(dispatch_get_main_queue(), ^{
         [gasButton sendActionsForControlEvents:UIControlEventTouchDown];
         const KartPadClassicInputState before = kartpad::mobile::AdaptSunPadInput(
-            [[SunPadInputMixer sharedMixer] consumeMergedState]);
+            [[KartPadPhysicalControllers sharedControllers] consumeMergedPlayerOne]);
         [self toggleSettingsPanel];
         const KartPadClassicInputState after = kartpad::mobile::AdaptSunPadInput(
-            [[SunPadInputMixer sharedMixer] consumeMergedState]);
+            [[KartPadPhysicalControllers sharedControllers] consumeMergedPlayerOne]);
         const BOOL passed =
             (before.buttons & kartpad::mobile::kClassicButtonA) != 0 &&
             (after.buttons & kartpad::mobile::kClassicButtonA) == 0;
@@ -3645,6 +3645,7 @@ static void KartPadApplySoundLevels(BOOL persist) {
     SunPadInputState ignored{};
     [[KartPadPhysicalControllers sharedControllers] consumePlayer:player state:&ignored];
   }
+  [[KartPadPhysicalControllers sharedControllers] resetDolphinShortcut];
   [[KartPadMotionSteering sharedSteering] start];
   AudioBackend::Instance().SetPausedForHost(false);
   NSLog(@"[KartPad] current game resumed from main menu; frame %d -> %d", pausedFrame, g_gxFrameCount);
@@ -3740,6 +3741,7 @@ static void KartPadApplySoundLevels(BOOL persist) {
   if ([NSUserDefaults.standardUserDefaults objectForKey:kKartPadSoundCustomKey] != nil) {
     KartPadApplySoundLevels(YES);
   }
+  [[KartPadPhysicalControllers sharedControllers] resetDolphinShortcut];
   [[SunPadInputMixer sharedMixer] clearInputFromTouch:YES];
   if ([_overlay isKindOfClass:KartPadGameOverlay.class]) {
     [(KartPadGameOverlay *)_overlay resetKartPadControlAppearance];
@@ -3749,6 +3751,7 @@ static void KartPadApplySoundLevels(BOOL persist) {
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
   (void)notification;
+  [[KartPadPhysicalControllers sharedControllers] resetDolphinShortcut];
   [[KartPadPhysicalControllers sharedControllers] reconcileControllers];
   [[KartPadMotionSteering sharedSteering] start];
   [self reattachOverlayIfNeeded];
@@ -4602,7 +4605,9 @@ static void KartPadApplySoundLevels(BOOL persist) {
 
 - (void)showControllerButtonMapping {
   UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Controller Button Mapping"
-      message:@"Choose an action to reassign. Sticks and Menu remain direct. Trigger presses can be assigned like buttons."
+      message:[[KartPadPhysicalControllers sharedControllers] isDolphinProfileEnabled]
+          ? @"Player 1 uses the DolphiniOS preset. These assignments still apply to other players. Switch Player 1 to Standard in Controller Setup to customize it here."
+          : @"Choose an action to reassign. Sticks and Menu remain direct. Trigger presses can be assigned like buttons."
       preferredStyle:UIAlertControllerStyleActionSheet];
   const SunPadControllerButtonMapping mapping = [SunPadControllerMappingStore mapping];
   NSArray<NSString *> *names = @[@"A — Accelerate / Confirm", @"B — Drift / Back",
@@ -4644,10 +4649,19 @@ static void KartPadApplySoundLevels(BOOL persist) {
   KartPadPhysicalControllers *controllers = [KartPadPhysicalControllers sharedControllers];
   [controllers reconcileControllers];
   NSString *players = [[controllers playerDescriptions] componentsJoinedByString:@"\n"];
-  NSString *message = players;
+  const BOOL dolphinProfile = [controllers isDolphinProfileEnabled];
+  NSString *message = [players stringByAppendingString:dolphinProfile
+      ? @"\nPlayer 1: DolphiniOS Xbox preset. Curve 1.3, trigger 60%, timed Y shortcut."
+      : @"\nPlayer 1: standard controller mapping."];
   UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Controller Setup"
       message:message preferredStyle:UIAlertControllerStyleAlert];
   __weak KartPadRuntimeOverlayHost *weakSelf = self;
+  [sheet addAction:[UIAlertAction actionWithTitle:dolphinProfile
+      ? @"Use Standard Player 1 Mapping" : @"Use DolphiniOS Xbox Preset for Player 1"
+      style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    [controllers setDolphinProfileEnabled:!dolphinProfile];
+    [weakSelf gameOverlayRequestsControllerMapping:nil];
+  }]];
   [sheet addAction:[UIAlertAction actionWithTitle:@"Customize Buttons & Triggers…"
       style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
     [weakSelf showControllerButtonMapping];
@@ -4797,7 +4811,7 @@ extern "C" bool KartPadMobileReadClassicInputForPlayer(
   }
   SunPadInputState source{};
   if (player == 0) {
-    source = [[SunPadInputMixer sharedMixer] consumeMergedState];
+    source = [[KartPadPhysicalControllers sharedControllers] consumeMergedPlayerOne];
   } else if (player < 4) {
     [[KartPadPhysicalControllers sharedControllers] consumePlayer:player
                                                             state:&source];

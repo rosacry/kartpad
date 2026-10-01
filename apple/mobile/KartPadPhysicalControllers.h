@@ -36,6 +36,10 @@ SunPadInputState KartPadAdaptPhysicalControllerSample(
 - (void)stop;
 - (void)reconcileControllers;
 - (BOOL)consumePlayer:(NSUInteger)player state:(SunPadInputState *)state;
+- (SunPadInputState)consumeMergedPlayerOne;
+- (BOOL)isDolphinProfileEnabled;
+- (void)setDolphinProfileEnabled:(BOOL)enabled;
+- (void)resetDolphinShortcut;
 - (BOOL)isPlayerConnected:(NSUInteger)player;
 - (NSArray<NSString *> *)playerDescriptions;
 - (NSUInteger)connectedControllerCount;
