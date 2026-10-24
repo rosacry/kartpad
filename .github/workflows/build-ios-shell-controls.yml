@@ -5,7 +5,7 @@ name: KartPad iOS app shell (Dolphin controller preset)
 # privately afterwards with PadMint; nothing from a disc is used here.
 on:
   push:
-    branches: [controls-v0.7.3, controls-v0.8.1]
+    branches: [controls-v0.8.5]
   workflow_dispatch:
 
 permissions:
@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [xcode-27, macos-26]
+        runner: [macos-26]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 300
     steps:
