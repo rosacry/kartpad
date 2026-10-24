@@ -27,7 +27,9 @@ for name in profile["sourceDependencies"]:
     path = repo / dep["path"]
     if not (path / ".git").exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "clone", "--recurse-submodules", dep["repository"], str(path)], check=True)
+        # Select the release's revision before initializing its submodules.
+        # Newer upstream revisions may turn a vendored directory into a submodule.
+        subprocess.run(["git", "clone", "--no-checkout", dep["repository"], str(path)], check=True)
         subprocess.run(["git", "-C", str(path), "checkout", "--detach", dep["commit"]], check=True)
         subprocess.run(["git", "-C", str(path), "submodule", "update", "--init", "--recursive"], check=True)
     _verify_checkout(repo, dep)
